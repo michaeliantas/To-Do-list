@@ -79,16 +79,25 @@ if ($_SESSION['logged_in'] && isset($_SESSION['username'])) {
     if (!empty($_SESSION['todo_lists'][$username]) && isset($_SESSION['todo_lists'][$username][0]) && is_string($_SESSION['todo_lists'][$username][0])) {
         $new = [];
         foreach ($_SESSION['todo_lists'][$username] as $text) {
-            $new[] = ['text' => $text, 'pinned' => false, 'expiry' => '', 'category' => ''];
+            $new[] = ['id' => uniqid('task_', true), 'text' => $text, 'pinned' => false, 'expiry' => '', 'category' => '', 'completed' => false];
         }
         $_SESSION['todo_lists'][$username] = $new;
     }
+    foreach ($_SESSION['todo_lists'][$username] as &$item) {
+        if (!isset($item['completed'])) {
+            $item['completed'] = false; // Keep old saved tasks in the same task structure.
+        }
+        if (!isset($item['id'])) {
+            $item['id'] = uniqid('task_', true); // Stable id prevents display indexes from toggling the wrong task.
+        }
+    }
+    unset($item);
     if (!empty($_SESSION['deleted_batches_per_user'][$username]) && isset($_SESSION['deleted_batches_per_user'][$username][0][0]) && is_string($_SESSION['deleted_batches_per_user'][$username][0][0])) {
         $new_batches = [];
         foreach ($_SESSION['deleted_batches_per_user'][$username] as $batch) {
             $new_batch = [];
             foreach ($batch as $text) {
-                $new_batch[] = ['text' => $text, 'pinned' => false, 'expiry' => '', 'category' => ''];
+                $new_batch[] = ['id' => uniqid('task_', true), 'text' => $text, 'pinned' => false, 'expiry' => '', 'category' => '', 'completed' => false];
             }
             $new_batches[] = $new_batch;
         }
@@ -139,14 +148,34 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         $deleted_batches = &$_SESSION['deleted_batches_per_user'][$username];
         if (isset($_POST['reorder']) && isset($_POST['order'])) {
             $ordered = [];
+            $seen = [];
             foreach ($_POST['order'] as $index) {
                 $index = (int)$index;
-                if (isset($todo_list[$index])) {
+                if (isset($todo_list[$index]) && !isset($seen[$index])) {
                     $ordered[] = $todo_list[$index];
+                    $seen[$index] = true; // Ignore duplicate indexes so reorder cannot duplicate tasks.
                 }
             }
             if (count($ordered) === count($todo_list)) {
                 $todo_list = $ordered;
+            }
+            exit;
+        } elseif (isset($_POST['toggle_done']) && isset($_POST['done_index'])) {
+            $doneIndex = (int)$_POST['done_index'];
+            if (isset($_POST['done_id'])) {
+                foreach ($todo_list as $index => $item) {
+                    if (($item['id'] ?? '') === $_POST['done_id']) {
+                        $doneIndex = $index;
+                        break;
+                    }
+                }
+            }
+            if (isset($todo_list[$doneIndex])) {
+                $todo_list[$doneIndex]['completed'] = !empty($_POST['completed']); // Same task array, just toggled.
+                if ($todo_list[$doneIndex]['completed']) {
+                    $_SESSION['notification'] = 'Task finished';
+                    $_SESSION['notification_type'] = 'finished';
+                }
             }
             exit;
         } elseif (isset($_POST['delete']) && isset($_POST['delete_items'])) {
@@ -195,6 +224,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         $todo_list[$editIndex]['text'] = htmlspecialchars($newText);
         $todo_list[$editIndex]['expiry'] = $newExpiry;
         $todo_list[$editIndex]['category'] = htmlspecialchars($newCategory);
+        $_SESSION['notification'] = 'Edit saved';
+        $_SESSION['notification_type'] = 'edit';
         }
         } elseif (isset($_POST['add'])) {
             $added_count = 0;
@@ -202,7 +233,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 $expiry = normalize_expiry($_POST['expiry'][$i] ?? '');
                 $category = trim($_POST['categories'][$i] ?? '');
                 if (!empty($thing)) {
-                    $todo_list[] = ['text' => htmlspecialchars($thing), 'pinned' => false, 'expiry' => $expiry, 'category' => htmlspecialchars($category)];
+                    $todo_list[] = ['id' => uniqid('task_', true), 'text' => htmlspecialchars($thing), 'pinned' => false, 'expiry' => $expiry, 'category' => htmlspecialchars($category), 'completed' => false];
                     $added_count++;
                 }
             }
@@ -336,7 +367,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
           color: black;
         }
     
-        input[type="submit"][name="login"] {
+        input[type="submit"][name="login"],
+        input[type="submit"][name="signup"] {
          background-color: #2196F3;
         color: white;
         }
@@ -368,6 +400,26 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         li input[type="checkbox"] {
             margin-right: 10px;
         }
+        .task-check {
+            display: inline-flex;
+            flex-direction: column;
+            align-items: center;
+            color: #555;
+            font-size: 11px;
+            line-height: 1.1;
+            margin-right: 10px;
+        }
+        li .task-check input[type="checkbox"] {
+            margin: 3px 0 0;
+        }
+        li.completed span {
+            color: #777;
+            text-decoration: line-through;
+        }
+        .completed-heading {
+            margin-top: 20px;
+            text-align: left;
+        }
         p {
             text-align: center;
             margin: 10px 0;
@@ -395,6 +447,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             border: 1px solid #81c784;
             color: #256029;
         }
+        .notification.edit {
+            background-color: #e8f5e9;
+            border: 1px solid #4caf50;
+            color: #1b5e20;
+        }
         .notification.delete {
             background-color: #ffebee;
             border: 1px solid #e57373;
@@ -404,6 +461,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             background-color: #f3e5f5;
             border: 1px solid #ba68c8;
             color: #6a1b9a;
+        }
+        .notification.finished {
+            background-color: #fce4ec;
+            border: 1px solid #f06292;
+            color: #ad1457;
         }
         .notification.hide {
             display: none;
@@ -481,6 +543,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 <div class="container">
 <form action="index.php" method="post">
     <h2>Your To-Do List</h2>
+    <?php
+    $username = $_SESSION['username'];
+    $todo_list = $_SESSION['todo_lists'][$username] ?? []; // Load once before the list/search UI uses it.
+    ?>
     <?php if (!empty($_SESSION['notification'])): ?>
     <!-- Lightweight UI notification for task actions. -->
     <p class="notification <?php echo htmlspecialchars($_SESSION['notification_type'] ?? 'add'); ?>" id="notification"><?php echo htmlspecialchars($_SESSION['notification']); ?></p>
@@ -494,18 +560,21 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     <?php endif; ?>
 
     <?php
-    $username = $_SESSION['username'];
-    $todo_list = $_SESSION['todo_lists'][$username];
     if (!empty($todo_list)) {
         $pinned = [];
         $unpinned = [];
+        $completed = [];
         foreach ($todo_list as $index => $item) {
-            if ($item['pinned']) {
-                $pinned[] = ['index' => $index, 'text' => $item['text'], 'expiry' => $item['expiry'] ?? '', 'category' => $item['category'] ?? ''];
+            $task = ['index' => $index, 'id' => $item['id'] ?? '', 'text' => $item['text'], 'expiry' => $item['expiry'] ?? '', 'category' => $item['category'] ?? '', 'completed' => $item['completed'] ?? false, 'pinned' => $item['pinned'] ?? false];
+            if (!empty($task['completed'])) {
+                $completed[] = $task; // Completed tasks stay in the same array, rendered separately.
+            } elseif ($task['pinned']) {
+                $pinned[] = $task;
             } else {
-                $unpinned[] = ['index' => $index, 'text' => $item['text'], 'expiry' => $item['expiry'] ?? '', 'category' => $item['category'] ?? ''];
+                $unpinned[] = $task;
             }
         }
+        echo "<h3 class='completed-heading'>Active</h3>";
         echo "<ul id='todoList'>";
         foreach ($pinned as $p) {
             $isExpired = false;
@@ -517,8 +586,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $dueText = $p['expiry'] ? " <span style='font-size:0.9em; color:#555;'>(Due: " . display_expiry($p['expiry']) . ")</span>" : '';
             $categoryText = $p['category'] ? " <span style='font-weight:bold; color:#007bff;'>[{$p['category']}]</span>" : '';
             $style = $isExpired ? ' style="color: red;"' : '';
+            $taskId = htmlspecialchars($p['id']);
             echo "<li draggable='true' data-index='{$p['index']}' data-pinned data-expiry='{$p['expiry']}' data-category='{$p['category']}'{$expiredClass}>
-                    <input type='checkbox' name='delete_items[]' value='{$p['index']}'>
+                    <label class='task-check'>Edit<input type='checkbox' name='delete_items[]' value='{$p['index']}'></label>
+                    <label class='task-check'>Finish<input type='checkbox' class='done-toggle' data-index='{$p['index']}' data-id='{$taskId}' title='Mark done'></label>
                     <span{$style}>&#8658; {$categoryText} {$p['text']}{$dueText}</span>
                   </li>";
         }
@@ -532,34 +603,55 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $dueText = $u['expiry'] ? " <span style='font-size:0.9em; color:#555;'>(Due: " . display_expiry($u['expiry']) . ")</span>" : '';
             $categoryText = $u['category'] ? " <span style='font-weight:bold; color:#007bff;'>[{$u['category']}]</span>" : '';
             $style = $isExpired ? ' style="color: red;"' : '';
+            $taskId = htmlspecialchars($u['id']);
             echo "<li draggable='true' data-index='{$u['index']}' data-expiry='{$u['expiry']}' data-category='{$u['category']}'{$expiredClass}>
-                    <input type='checkbox' name='delete_items[]' value='{$u['index']}'>
+                    <label class='task-check'>Edit<input type='checkbox' name='delete_items[]' value='{$u['index']}'></label>
+                    <label class='task-check'>Finish<input type='checkbox' class='done-toggle' data-index='{$u['index']}' data-id='{$taskId}' title='Mark done'></label>
                     <span{$style}>{$categoryText} {$u['text']}{$dueText}</span>
                   </li>";
         }
         echo "</ul>";
+        if (!empty($completed)) {
+            echo "<h3 class='completed-heading'>Completed</h3>";
+            echo "<ul id='completedList'>";
+            foreach ($completed as $c) {
+                $dueText = $c['expiry'] ? " <span style='font-size:0.9em;'>(Due: " . display_expiry($c['expiry']) . ")</span>" : '';
+                $categoryText = $c['category'] ? " <span style='font-weight:bold; color:#007bff;'>[{$c['category']}]</span>" : '';
+                $pinnedAttr = $c['pinned'] ? ' data-pinned' : '';
+                $pinText = $c['pinned'] ? '&#8658; ' : '';
+                $taskId = htmlspecialchars($c['id']);
+                echo "<li class='completed' data-index='{$c['index']}'{$pinnedAttr} data-expiry='{$c['expiry']}' data-category='{$c['category']}'>
+                        <label class='task-check'>Edit<input type='checkbox' name='delete_items[]' value='{$c['index']}'></label>
+                        <label class='task-check'>Active<input type='checkbox' class='done-toggle' data-index='{$c['index']}' data-id='{$taskId}' checked title='Mark active'></label>
+                        <span>{$pinText}{$categoryText} {$c['text']}{$dueText}</span>
+                      </li>";
+            }
+            echo "</ul>";
+        }
     }
     ?>
 
-    <label for="Things to do">Things to do:</label>
-    <input type="text" id="Things to do" name="things[]">
-    <label for="category" id="categoryLabel" style="display:none;">Category:</label>
-    <select id="category" name="categories[]" style="display:none;">
-        <option value="">None</option>
-        <option value="Work">Work</option>
-        <option value="Personal">Personal</option>
-        <option value="Shopping">Shopping</option>
-        <option value="Health">Health</option>
-        <option value="Education">Education</option>
-        <option value="Finance">Finance</option>
-        <option value="Travel">Travel</option>
-        <option value="Home">Home</option>
-    </select>
-    <label for="expiry" id="expiryLabel" style="display:none;">Expiry Date:</label>
-    <input type="date" id="expiry" name="expiry[]" style="display:none;">
-    <button type="submit" name="clear_expiry" id="clearExpiry" style="display:none;">Clear Expiry</button>
+    <div id="taskFields" style="display:none;">
+        <label for="Things to do">Things to do:</label>
+        <input type="text" id="Things to do" name="things[]">
+        <label for="category" id="categoryLabel" style="display:none;">Category:</label>
+        <select id="category" name="categories[]" style="display:none;">
+            <option value="">None</option>
+            <option value="Work">Work</option>
+            <option value="Personal">Personal</option>
+            <option value="Shopping">Shopping</option>
+            <option value="Health">Health</option>
+            <option value="Education">Education</option>
+            <option value="Finance">Finance</option>
+            <option value="Travel">Travel</option>
+            <option value="Home">Home</option>
+        </select>
+        <label for="expiry" id="expiryLabel" style="display:none;">Expiry Date:</label>
+        <input type="date" id="expiry" name="expiry[]" style="display:none;">
+        <button type="button" id="clearExpiry" style="display:none;">Clear Expiry</button>
+    </div>
     <input type="hidden" id="editIndex" name="edit_index" value="">
-    <button type="button" id="addButton" onclick="addTaskInput()">Add Another</button>
+    <button type="button" id="addButton" onclick="addTaskInput()">Add Task</button>
     <input type="submit" name="edit" id="editButton" value="Save Edit" disabled>
     <input type="submit" name="pin" value="Pin Selected" id="pinButton">
 
@@ -593,41 +685,49 @@ const expiryInput = document.getElementById('expiry');
 const clearExpiryButton = document.getElementById('clearExpiry');
 const categoryInput = document.getElementById('category');
 const categoryLabel = document.getElementById('categoryLabel');
+const taskFields = document.getElementById('taskFields');
+let addingTask = false;
+
+function showTaskFields() {
+    if (taskFields) {
+        taskFields.style.display = 'block';
+    }
+    categoryInput.style.display = 'block';
+    categoryLabel.style.display = 'block';
+    expiryInput.style.display = 'block';
+    document.getElementById('expiryLabel').style.display = 'block';
+}
+
+function hideTaskFields() {
+    if (taskFields) {
+        taskFields.style.display = 'none';
+    }
+    categoryInput.style.display = 'none';
+    categoryLabel.style.display = 'none';
+    expiryInput.style.display = 'none';
+    document.getElementById('expiryLabel').style.display = 'none';
+    todoInput.value = '';
+    categoryInput.value = '';
+    expiryInput.value = '';
+}
+
+function setAddButtonMode(isExit) {
+    addButton.textContent = isExit ? 'Exit' : 'Add Task';
+    addButton.style.backgroundColor = isExit ? '#f44336' : '';
+}
 
 function addTaskInput() {
-    const form = document.querySelector('form');
-    const lastThingInput = Array.from(form.querySelectorAll('input[name="things[]"]')).pop();
-    const newInput = document.createElement('input');
-    newInput.type = 'text';
-    newInput.name = 'things[]';
-    newInput.placeholder = 'Another thing to do';
-    const categoryLabel = document.createElement('label');
-    categoryLabel.textContent = 'Category:';
-    const categorySelect = document.createElement('select');
-    categorySelect.name = 'categories[]';
-    categorySelect.innerHTML = `
-        <option value="">None</option>
-        <option value="Work">Work</option>
-        <option value="Personal">Personal</option>
-        <option value="Shopping">Shopping</option>
-        <option value="Health">Health</option>
-        <option value="Education">Education</option>
-        <option value="Finance">Finance</option>
-        <option value="Travel">Travel</option>
-        <option value="Home">Home</option>
-    `;
-    const br = document.createElement('br');
-    if (lastThingInput) {
-        lastThingInput.parentNode.insertBefore(newInput, lastThingInput.nextSibling);
-        newInput.parentNode.insertBefore(categoryLabel, newInput.nextSibling);
-        categoryLabel.parentNode.insertBefore(categorySelect, categoryLabel.nextSibling);
-        categorySelect.parentNode.insertBefore(br, categorySelect.nextSibling);
-    } else {
-        form.insertBefore(newInput, document.getElementById('addButton'));
-        form.insertBefore(categoryLabel, document.getElementById('addButton'));
-        form.insertBefore(categorySelect, document.getElementById('addButton'));
-        form.insertBefore(br, document.getElementById('addButton'));
+    if (taskFields && taskFields.style.display === 'none') {
+        addingTask = true;
+        showTaskFields();
+        setAddButtonMode(true);
+        todoInput.focus();
+        return;
     }
+
+    addingTask = false;
+    hideTaskFields();
+    setAddButtonMode(false);
 }
 
 function setActionMode() {
@@ -638,16 +738,15 @@ function setActionMode() {
     const categoryInput = document.getElementById('category');
     const categoryLabel = document.getElementById('categoryLabel');
     if (checked.length === 1) {
+        addingTask = false;
+        setAddButtonMode(false);
+        showTaskFields();
         addButton.style.display = 'none';
         editButton.disabled = false;
-        expiryInput.style.display = 'inline-block';
-        expiryLabel.style.display = 'inline-block';
         clearExpiryButton.style.display = 'inline-block';
-        categoryInput.style.display = 'inline-block';
-        categoryLabel.style.display = 'inline-block';
         const index = checked[0].value;
         const li = checked[0].closest('li');
-        const text = li.querySelector('span').textContent.replace(/^=>\s*/, '').replace(/\[.*?\]\s*/, '').replace(/\(Due: [0-9\-]+\)$/, '').trim();
+        const text = li.querySelector('span').textContent.replace(/^⇒\s*/, '').replace(/\[.*?\]\s*/, '').replace(/\(Due: .*?\)\s*$/, '').trim();
         const expiryValue = li.dataset.expiry || '';
         const categoryValue = li.dataset.category || '';
         editIndexInput.value = index;
@@ -659,11 +758,11 @@ function setActionMode() {
     } else {
         addButton.style.display = 'inline-block';
         editButton.disabled = true;
-        expiryInput.style.display = 'none';
-        expiryLabel.style.display = 'none';
         clearExpiryButton.style.display = 'none';
-        categoryInput.style.display = 'none';
-        categoryLabel.style.display = 'none';
+        if (!addingTask) {
+            hideTaskFields();
+            setAddButtonMode(false);
+        }
         editIndexInput.value = '';
         todoInput.value = '';
         expiryInput.value = '';
@@ -680,6 +779,12 @@ if (pinButton) {
         });
     });
     setActionMode();
+}
+
+if (clearExpiryButton) {
+    clearExpiryButton.addEventListener('click', function() {
+        expiryInput.value = ''; // Only clear the date field; Save Edit stores the change.
+    });
 }
 
 function updateButton() {
@@ -737,9 +842,10 @@ function getDropTarget(container, y) {
 }
 
 function refreshTaskIndexes() {
-    todoList.querySelectorAll('li').forEach((item, index) => {
+    document.querySelectorAll('#todoList li, #completedList li').forEach((item, index) => {
         item.dataset.index = index;
-        item.querySelector('input[type="checkbox"]').value = index;
+        item.querySelector('input[name="delete_items[]"]').value = index;
+        item.querySelector('.done-toggle').dataset.index = index;
     });
 }
 
@@ -747,7 +853,7 @@ function saveTaskOrder() {
     const body = new URLSearchParams();
     body.append('reorder', '1');
 
-    todoList.querySelectorAll('li').forEach((item) => {
+    document.querySelectorAll('#todoList li, #completedList li').forEach((item) => {
         body.append('order[]', item.dataset.index);
     });
 
@@ -758,6 +864,24 @@ function saveTaskOrder() {
         credentials: 'same-origin'
     }).then(refreshTaskIndexes);
 }
+
+// Toggle completion without changing the single task array structure.
+document.querySelectorAll('.done-toggle').forEach(cb => {
+    cb.addEventListener('change', function() {
+        const body = new URLSearchParams();
+        body.append('toggle_done', '1');
+        body.append('done_index', this.dataset.index);
+        body.append('done_id', this.dataset.id);
+        body.append('completed', this.checked ? '1' : '0');
+
+        fetch('index.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body,
+            credentials: 'same-origin'
+        }).then(() => window.location.reload());
+    });
+});
 
 if (todoList) {
     todoList.addEventListener('dragstart', function(event) {
